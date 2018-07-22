@@ -5,6 +5,7 @@ D.prepend_thread_names = false
 D.prepend_timestamps = false
 local buffer = require'buffer'
 local O = require'o'
+local unicode = require'unicode'
 
 
 
@@ -103,14 +104,13 @@ function ANSIParser:_loop()
       self.buf:rseek(n) n = 1
     elseif c == '\027[' then
       local function parse(text)
-        local row, col, cprlen = string.match(text, "\027%[([0-9]*);([0-9]*)()R")
+        local row, col, cprlen = string.match(text, "^\027%[([0-9]*);([0-9]*)()R")
         if row and col then
-          D'rc'(row, col)
           self.cursor_positions:put(tonumber(row) or 1, tonumber(col) or 1)
           self.buf:rseek(cprlen)
           return true
         end
-        local esc, esclen = string.match(text, "(\027%[[0-9;]*()[a-zA-Z~])")
+        local esc, esclen = string.match(text, "^(\027%[[0-9;]*()[a-zA-Z~])")
         if esc then
           key = self.keyseqs[esc]
           if key then
@@ -150,34 +150,20 @@ function ANSIBuffer:clearline()
   return self:write'\r\027[0K'
 end
 
-function ANSIBuffer:moveto(row, col)
-  return self:write('\027['..row..';'..col..'H')
-end
-
-function ANSIBuffer:moverel(drow, dcol)
-  if drow < 0 then self:up(-drow)
-  elseif drow > 0 then self:down(drow) end
-  if dcol < 0 then self:left(-dcol)
-  elseif dcol > 0 then self:right(dcol) end
-  return self
-end
-
 function ANSIBuffer:up(rows)
   rows = rows or 1
   if rows == 0 then
     return self
-  else
+  elseif rows > 0 then
     return self:write('\027['..rows..'A')
+  else
+    return self:write('\027['..-rows..'B')
   end
 end
 
 function ANSIBuffer:down(rows)
   rows = rows or 1
-  if rows == 0 then
-    return self
-  else
-    return self:write('\027['..rows..'B')
-  end
+  return self:up(-rows)
 end
 
 function ANSIBuffer:left(cols)
@@ -199,11 +185,11 @@ function ANSIBuffer:right(cols)
 end
 
 function ANSIBuffer:col(col)
-  col = col or 0
-  if col == 0 then
+  col = col or 1
+  if col == 1 then
     return self:write'\r'
   else
-    return self:write('\r\027['..col..'C')
+    return self:write('\r\027['..(col-1)..'C')
   end
 end
 
@@ -211,6 +197,90 @@ function ANSIBuffer:flush(out)
   out:write(self.buffer:read())
   out:flush()
   return self
+end
+
+
+
+local UnicodeText = O()
+UnicodeText.__type = 'lineedit.UnicodeText'
+
+UnicodeText.new = O.constructor(function (self, bytes, start_vcol)
+  local vcol, off = start_vcol or  1, 1
+  local vcols, offsets, revoff = { vcol }, { off }, { 1 }
+  local screenwidths, bytewidths = unicode.codepoint_widths(bytes)
+  local j=1
+  for i=1,#screenwidths do
+    local width = string.byte(screenwidths, i)
+    vcol = vcol + width
+    off = off + string.byte(bytewidths, i)
+    if width > 0 then
+      j = j + 1
+    end
+    vcols[j] = vcol
+    offsets[j] = off
+    revoff[off] = j
+  end
+  self.bytes = bytes
+  self.vcols = vcols
+  self.offsets = offsets
+  self.revoffsets = revoff
+end)
+
+function UnicodeText:length()
+  return #self.vcols-1
+end
+
+function UnicodeText:size()
+  return self.vcols[#self.vcols]
+end
+
+function UnicodeText:wrapped_position(pos, cols)
+  if pos == -1 then pos = #self.vcols end
+  if pos > #self.vcols then pos = #self.vcols end
+  local vcol = self.vcols[pos]
+  local crow = math.ceil((vcol-1) / cols)
+  local ccol = (vcol-1) % cols + 1
+  if ccol == 1 and pos == #self.vcols then ccol = cols end
+  return crow, ccol
+end
+
+function UnicodeText:wrapped_size(cols)
+  return math.ceil((self.vcols[#self.vcols]-1) / cols), cols
+end
+
+function UnicodeText:match(pattern, start)
+  if start > #self.vcols then start = #self.vcols end
+  local results = {self.bytes:match(pattern, self.offsets[start])}
+  for i,r in ipairs(results) do
+    if type(r) == 'number' then
+      results[i] = self.revoffsets[r]
+    end
+  end
+  return unpack(results)
+end
+
+function UnicodeText:sub(s, e)
+  if not s then s = 1 end
+  if s > #self.vcols then s = #self.vcols end
+  if not e or e == -1 or e > #self.vcols then e = #self.vcols else e = e + 1 end
+  if e < s then return '' end
+  D'sub:'(s, e, self.offsets[s], self.offsets[e])
+  return string.sub(self.bytes, self.offsets[s], self.offsets[e] - 1)
+end
+
+local function test_UnicodeText()
+  local ut = UnicodeText:new('❓ąą🙂')
+  assert(ut.vcols[1] == 1)
+  assert(ut.vcols[2] == 3)
+  assert(ut.vcols[3] == 4)
+  assert(ut.vcols[4] == 5)
+  assert(ut.vcols[5] == 7)
+  assert(D'1'(ut:sub(3)) == 'ą🙂')
+  assert(D'1'(ut:sub(4)) == '🙂')
+  assert(D'2'(ut:sub(1,1)) == '❓')
+  assert(D'3'(ut:sub(2,3)) == 'ąą')
+  assert(D'4'(ut:sub(3,3)) == 'ą')
+  assert(D'5'(ut:sub(4,4)) == '🙂')
 end
 
 
@@ -226,118 +296,62 @@ Prompt.new = O.constructor(function (self, input, output, opts)
   opts = opts or {}
   self.input = input
   self.output = output
-  self.history = opts.history or {}
-  self.prompt = opts.prompt or '❓ ' self.text = '' self.pos = 1
-  self.onscreen_prompt = '' self.onscreen_text = '' self.onscreen_pos = 1
-  self.onscreen_columns = 0
-  self.history_offset = 1
-  self._grapheme_widths = {}
-  self.valid_offsets = { 1 }
-  self.valid_positions = { {0,0} }
   self.buf = ANSIBuffer:new()
   self.lines = T.Mailbox:new()
+
+  self.history = opts.history or {}
+  self.history_offset = 1
+
+  self.prompt = UnicodeText:new(opts.prompt or '❓ ')
+  self.text = self:setText('')
+  self.pos = 1
+
+  self.onscreen_prompt = UnicodeText:new('')
+  self.onscreen_text = UnicodeText:new('', self.onscreen_prompt:size())
+  self.onscreen_pos = 1
+
+  self.onscreen_columns = 0
 end)
 
-local function unwrap(pos, cols)
-  return pos[1] * cols + pos[2]
+function Prompt:setPrompt(bytes)
+  self.prompt = UnicodeText:new(bytes)
+  self:setText(self.text.bytes)
 end
 
-local function wrap(vcol, cols)
-  local crow = math.floor(vcol / cols)
-  local ccol = vcol % cols
-  return crow, ccol
+function Prompt:setText(bytes)
+  self.text = UnicodeText:new(bytes, self.prompt:size())
 end
 
-function Prompt:_calc_position(prompt, text, pos)
-  -- D'_calc_position'(pos, self.valid_positions)
-  local _, cols = io.get_term_size()
-  local crow, ccol = wrap(unwrap(self.valid_positions[pos], self.onscreen_columns), cols)
-  local rows = math.ceil(unwrap(self.valid_positions[#self.valid_positions], self.onscreen_columns) / cols)
-  -- local rows = math.ceil((#prompt + #text) / cols)
-  -- local crow = math.floor(pos / cols)
-  -- local ccol = pos % cols
-  return crow, ccol, rows
-end
-
-function Prompt:clear_onscreen()
-  -- self.buf:write'\027[6n':flush(self.output)
-  -- local row, col = self.input.cursor_positions:recv()
-  -- local cyx = self.valid_positions[self.onscreen_pos]
-  -- local last_yx = self.valid_positions[#self.valid_positions]
-  local crow, _, rows = D'_calc_position:'(self:_calc_position(self.onscreen_prompt, self.onscreen_text, self.onscreen_pos))
-  self.buf:down(rows-1 - crow)
+function Prompt:buf_clear_onsceen()
+  local rows = self.onscreen_text:wrapped_size(self.onscreen_columns)
+  local crow = self.onscreen_text:wrapped_position(self.onscreen_pos, self.onscreen_columns)
+  self.buf:down(rows - crow)
   for _=1,rows-1 do
     self.buf:clearline():up()
   end
   self.buf:clearline()
+  return self.buf
 end
 
-function Prompt:position_cursor()
-  -- self.buf:up(rows-1 - crow):col(ccol):flush(self.output)
-  local cyx = assert(self.valid_positions[self.onscreen_pos])
-  local yx = assert(self.valid_positions[self.pos])
-  self.buf:moverel(yx[1]-cyx[1], yx[2]-cyx[2]):flush(self.output)
+function Prompt:buf_position_cursor()
+  local crow = self.onscreen_text:wrapped_position(self.onscreen_pos, self.onscreen_columns)
+  local row, col = self.onscreen_text:wrapped_position(self.pos, self.onscreen_columns)
+  self.buf:up(crow - row):col(col)
   self.onscreen_pos = self.pos
+  return self.buf
 end
 
 function Prompt:draw()
-  D'@'(self.text)
-  D'@'(D.unq(self.text))
-  local _, term_columns = io.get_term_size()
-  local dx = self._grapheme_widths
-  local offsets = self.valid_offsets
-  local valid_positions = self.valid_positions
-  local n = 1
-  local query_text = string.gsub(self.text, "(()[%z\1-\127\194-\244][\128-\191]*)", function (char, offset)
-    offsets[n] = offset
-    if string.byte(char) > 127 then
-      dx[n] = "?"
-      n = n + 1
-      return char..'\027[6n'
-    else
-      dx[n] = 1
-      n = n + 1
-      return char..'\027[6n'
-      -- return char
-    end
-  end)
-  for i=n,#offsets do dx[i] = nil offsets[i] = nil valid_positions[i] = nil end
-  offsets[n] = #self.text
-  -- self.buf:write('\027[6n\0277'..self.prompt..self.text..'\027[6n\0278\027[6n')
-  self.buf:write'\027[6n':write(self.prompt):write'\027[6n':write(query_text):write'\027[6n':flush(self.output)
-  -- D'poss'({self.input.cursor_positions:recv()},{self.input.cursor_positions:recv()},{self.input.cursor_positions:recv()})
-  local start_row, start_col = self.input.cursor_positions:recv()
-  local row, col = self.input.cursor_positions:recv()
-  local prev_row, prev_col
-  local j = 1
-  D'dx'(dx)
-  for i=1,n do
-    -- D'row, col:'(row, col, dx[i], term_columns, string.sub(self.text, offsets[i] or -1))
-    if col ~= prev_col or row ~= prev_row then
-      valid_positions[j] = { row--[[ - start_row]], col--[[ - start_col]] }
-      prev_row = row--[[ - start_row]] prev_col = col--[[ - start_col]]
-      j = j + 1
-    else
-      table.remove(offsets, i-1)
-    end
-    if dx[i] == '?' then
-      row, col = self.input.cursor_positions:recv()
-    elseif dx[i] then
-      row, col = self.input.cursor_positions:recv()
-      -- col = col + dx[i]
-      while col > term_columns do
-        row = row + 1
-        col = col - term_columns
-      end
-    end
-  end
-  D'dx'(dx)
-  D'@'(self.valid_positions)
-  self.onscreen_pos = #self.valid_positions
-  self:position_cursor()
+  local _, cols = io.get_term_size()
+  self.onscreen_columns = cols
+
+  self:buf_clear_onsceen()
+  self.buf:write(self.prompt.bytes):write(self.text.bytes)
   self.onscreen_prompt = self.prompt
   self.onscreen_text = self.text
-  self.onscreen_columns = term_columns
+  self.onscreen_pos = -1
+  self:buf_position_cursor()
+  self.buf:flush(self.output)
 end
 
 function Prompt:update()
@@ -345,23 +359,10 @@ function Prompt:update()
   if term_columns ~= self.onscreen_columns or
      self.text ~= self.onscreen_text or
      self.prompt ~= self.onscreen_prompt then
-    D'redraw'()
-    self:clear_onscreen()
     self:draw(self.prompt, self.text, self.pos)
   else
-    D'reposition'()
-    self:position_cursor()
+    self:buf_position_cursor():flush(self.output)
   end
-end
-
-function Prompt:setText(text, keepend)
-  if keepend ~= false then
-    D'keepend'(self.pos, self.valid_positions)
-    if self.pos >= #self.valid_positions then self.pos = #self.valid_positions end
-  end
-  if self.pos >= #text then self.pos = #text end
-  self.text = text
-  return self
 end
 
 function Prompt:move(cols)
@@ -369,37 +370,39 @@ function Prompt:move(cols)
     self.pos = self.pos + cols
   end
   if cols == 'start' or self.pos < 1 then self.pos = 1 end
-  if cols == 'end' or self.pos > #self.valid_positions then self.pos = #self.valid_positions end
+  local max = self.text:length()+1
+  if cols == 'end' or self.pos > max then self.pos = max end
+  self.keepend = self.pos >= max
   return self
 end
 
 function Prompt:findRelPosAfterWord()
-  local n = self.text:match(self.after_word, self.pos+1 + 1)
+  local n = self.onscreen_text:match(self.after_word, self.pos)
   if n then
-    return n-1 - self.pos
+    return n - self.pos
   else
-    return #self.text - self.pos
+    return self.text:length()+1 - self.pos
   end
 end
 
 function Prompt:findRelPosStartOfWord()
   local best = 1
   local n = 1
-  while n and n-1 < self.pos do
+  while n and n < self.pos do
     best = n
     n = self.text:match(self.start_of_word, n)
   end
-  return best-1 - self.pos
+  return best - self.pos
 end
 
 function Prompt:insertText(text)
-  self:setText(self.text:sub(1, self.pos) .. text .. self.text:sub(self.pos+1))
+  self:setText(self.text:sub(1, self.pos-1) .. text .. self.text:sub(self.pos))
   return self
 end
 
 function Prompt:delete(ostart, oend)
   oend = oend or ostart
-  self:setText(self.text:sub(1, ostart+1 - 1)..self.text:sub(oend+1 + 1))
+  self:setText(self.text:sub(1, ostart - 1)..self.text:sub(oend + 1))
   return self
 end
 
@@ -412,7 +415,7 @@ function Prompt:addToHistory(text)
 end
 
 function Prompt:setTextFromHistory()
-  self:setText(self.history[#self.history + self.history_offset] or self.new_history_item, false)
+  self:setText(self.history[#self.history + self.history_offset] or self.new_history_item)
 end
 
 function Prompt:historyPrev()
@@ -481,111 +484,23 @@ function Prompt:handleInput(kind, data)
     end
   elseif kind == 'text' then
     self:insertText(data)
-    self:move(#data)
+    self:move(UnicodeText:new(data):length())
   end
-  D'='(self.history_offset, self.pos, self.valid_positions[self.pos])
   return self
 end
 
 local input = ANSIParser:new(io.stdin)
-local prompt = Prompt:new(input, io.stdout, {'a', 'b', 'cde'})
-
-local function utf8len(text)
-  local _, count = string.gsub(text, "[^\128-\193]", "")
-  return count
-end
-
-function utf8iter(text)
-  for uchar in string.gmatch(text, "([%z\1-\127\194-\244][\128-\191]*)") do
-    D'#'(uchar)
-    -- something
-  end
-end
-
-function test(text)
-  D'@'(text)
-  D'@'(D.unq(text))
-  local offsets = {}
-  local dx = {}
-  local ntext = string.gsub(text, "(()[%z\1-\127\194-\244][\128-\191]*)", function (char, i)
-    offsets[#offsets+1] = i
-    if string.byte(char) > 127 then
-      dx[#dx+1] = "?"
-      return char..'\027[6n'
-    else
-      dx[#dx+1] = 1
-      return char
-    end
-  end)
-  offsets[#offsets+1] = #text
-  io.stdout:write('\027[6n', ntext) io.stdout:flush()
-  local valid_positions = {}
-  local col = input.cursor_positions:recv()
-  for i=1,#dx+1 do
-    if col ~= valid_positions[#valid_positions] then
-      valid_positions[#valid_positions+1] = col
-    else
-      table.remove(offsets, i-1)
-    end
-    if dx[i] == '?' then
-      local ncol = input.cursor_positions:recv()
-    elseif dx[i] then
-      col = col + dx[i]
-    end
-  end
-  D'@'(offsets)
-  D'C'(valid_positions)
-end
-
--- utf8iter("abcąść abcąść")
---test("abcąść abcąść") -- breaks thread.lua
+local prompt = Prompt:new(input, io.stdout, { history = {'ą', 'b', 'cde', 'ąbc', 'ąaa'} })
 
 T.go(function ()
-  -- test("❓abcąść abcąść-")
-  -- test("❓aą aą🙂-")
-  -- test("aą-❓")
-  -- prompt:setText(string.rep('aaaabbbbcccc ', 30)):move(-150):update()
-  prompt:setText("❓aą aą🙂-"..string.rep('aaaabbbbcccc ', 3)..'🙂'):update()
+  -- prompt:setText("❓aą aą🙂-"..string.rep('aaaabbbbcccc ', 30)..'🙂')
+  -- prompt:setText("❓aą aą")
+  prompt:setText("ą")
+  prompt:update()
   while true do
-    local kind, data = D'key:'(input.keys:recv())
+    local kind, data = input.keys:recv()
     prompt:handleInput(kind, data):update()
-    -- p:setText(D.repr(kind, data)..string.rep('-', 300)):draw()
-    -- D.cyan('» ', io.stdout)()
-    -- io.stdout:write(string.rep('-', 300)) io.stdout:flush()
-    -- io.stdout:write('\027[2F') io.stdout:flush()
-    -- io.stdout:write('\027[u') io.stdout:flush()
   end
 end)
-
--- T.go(function ()
---   T.sleep(1)
---   io.stdout:write('\027[6n')
---   D'!'()
--- end)
-
--- while true do
-  -- io.stdout:write('» ')
-  -- io.stdout:flush()
-
-  -- local text = buf:readuntil('\027', 1)
-  -- if text then
-  --   if text ~= '' then
-  --     D'«'(buf:read())
-  --   end
-  --   D'#'(buf:read())
-  -- else
-  --   D'«'(buf:read())
-  -- end
-  -- for _,i in ipairs(string.split[[
-  --   ↑ ↓ ← →
-  --   ⇧↑ ⇧↓ ⇧← ⇧→
-  --   ⌃↑ ⌃↓ ⌃← ⌃→
-  --   ⌥↑ ⌥↓ ⌥← ⌥→
-  --   ⌘↑ ⌘↓ ⌘← ⌘→
-  --   ⌘⏎ ⇧⏎ ⌃⏎ ⌥⏎]]) do
-  --   io.stdout:write(i..' ') io.stdout:flush()
-    -- D'«'(io.raw_read(io.stdin))
-  -- end
--- end
 
 loop.run()
