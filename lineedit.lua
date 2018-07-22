@@ -419,10 +419,10 @@ function Prompt:setTextFromHistory()
 end
 
 function Prompt:historyPrev()
-  if self.history_offset == 1 then self.new_history_item = self.text end
+  if self.history_offset == 1 then self.new_history_item = self.text.bytes end
   local abs = #self.history + self.history_offset
   if abs <= 1 then return self.buf:beep() end
-  local prefix = self.text:sub(1, self.pos)
+  local prefix = self.text:sub(1, self.pos-1)
   while abs > 1 do
     abs = abs - 1
     if #prefix == 0 or self.history[abs]:startswith(prefix) then
@@ -436,7 +436,7 @@ end
 function Prompt:historyNext()
   if self.history_offset == 1 then return self.buf:beep() end
   local abs = #self.history + self.history_offset
-  local prefix = self.text:sub(1, self.pos)
+  local prefix = self.text:sub(1, self.pos-1)
   while abs <= #self.history do
     abs = abs + 1
     if #prefix == 0 or (self.history[abs] or self.new_history_item):startswith(prefix) then
@@ -459,9 +459,9 @@ function Prompt:handleInput(kind, data)
     elseif data == 'Cmd-Right' or data == 'fn-Right' then
       self:move'end'
     elseif data == 'Ctrl-Right' then
-      self:move(D'ff:'(self:findRelPosAfterWord()))
+      self:move(self:findRelPosAfterWord())
     elseif data == 'Ctrl-Left' then
-      self:move(D'fb:'(self:findRelPosStartOfWord()))
+      self:move(self:findRelPosStartOfWord())
     elseif data == 'Up' then
       self:historyPrev()
     elseif data == 'Down' then
