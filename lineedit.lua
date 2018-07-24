@@ -375,6 +375,13 @@ function Prompt:draw()
 
   self:buf_clear_onsceen()
   self.buf:write(self.prompt.bytes):write(self.text.bytes)
+  if self.text:size() % self.onscreen_columns == 0 then
+    -- Print one additional space to force the cursor into the next line
+    -- otherwise the terminal will keep the cursor in a strange place and
+    -- confuse the user and the wrapping algorithm. Btw. the mouse selection
+    -- works nicer if we avoid doing this unless necessary (at least in iTerm)
+    self.buf:write(' ')
+  end
   self.onscreen_prompt = self.prompt
   self.onscreen_text = self.text
   self.onscreen_pos = -1
