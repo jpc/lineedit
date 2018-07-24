@@ -1,8 +1,5 @@
 local T = require'thread'
 local loop = require'loop'
-local D = require'util'
-D.prepend_thread_names = false
-D.prepend_timestamps = false
 local buffer = require'buffer'
 local O = require'o'
 local unicode = require'unicode'
@@ -10,6 +7,26 @@ local unicode = require'unicode'
 
 
 local ANSIParser = O()
+ANSIParser.__type = 'lineedit.ANSIParser'
+
+ANSIParser.new = O.constructor(function (self, input)
+  assert(input == io.stdin) -- because of io.immediate_stdin
+  self.input = input
+  self.buf = buffer.new()
+
+  self.keys = T.Mailbox:new()
+  self.cursor_positions = T.Mailbox:new()
+  T.go(self._loop, self)
+end)
+
+function ANSIParser:feed()
+  local input, err = loop.read(self.input)
+  if input then
+    self.buf:write(input)
+  else
+    error(err)
+  end
+end
 
 ANSIParser.keyseqs = {
   ["\004"] = "EOF",
@@ -70,24 +87,6 @@ ANSIParser.keyseqs = {
   ["\127"] = "Backspace",
 }
 
-ANSIParser.new = O.constructor(function (self, input)
-  self.input = input
-  self.buf = buffer.new()
-
-  self.keys = T.Mailbox:new()
-  self.cursor_positions = T.Mailbox:new()
-  T.go(self._loop, self)
-end)
-
-function ANSIParser:feed()
-  local input, err = loop.read(io.stdin)
-  if input then
-    self.buf:write(input)
-  else
-    error(err)
-  end
-end
-
 function ANSIParser:_loop()
   io.immediate_stdin(true)
 
@@ -134,6 +133,7 @@ end
 
 
 local ANSIBuffer = O()
+ANSIBuffer.__type = 'lineedit.ANSIBuffer'
 
 ANSIBuffer.new = O.constructor(function (self, buf)
   self.buffer = buf or buffer:new()
@@ -297,6 +297,7 @@ function UnicodeText:sub(s, e)
 end
 
 local function test_UnicodeText()
+  local D = require'util'
   local ut = UnicodeText:new('❓ąą🙂')
   assert(ut.vcols[1] == 1)
   assert(ut.vcols[2] == 3)
@@ -320,10 +321,11 @@ Prompt.word_separators = '():,.;~*+%-=[%]{} '
 Prompt.after_word = '[^'..Prompt.word_separators..']+()'
 Prompt.start_of_word = '['..Prompt.word_separators..']+()'
 
-Prompt.new = O.constructor(function (self, input, output, opts)
+Prompt.new = O.constructor(function (self, inputfd, outputfd, opts)
   opts = opts or {}
-  self.input = input
-  self.output = output
+  self.inputfd = inputfd
+  self.input = ANSIParser:new(inputfd)
+  self.output = outputfd
   self.buf = ANSIBuffer:new()
 
   self.history = opts.history or {}
@@ -574,19 +576,11 @@ function Prompt:handleInput(kind, data)
   return
 end
 
-local input = ANSIParser:new(io.stdin)
-local prompt = Prompt:new(input, io.stdout, { history = {'ą', 'b', 'cde', 'ąbc', 'ąaa'} })
 
-T.go(function ()
-  -- prompt:setText("❓aą aą🙂-"..string.rep('aaaabbbbcccc ', 30)..'🙂')
-  -- prompt:setText("❓aą aą")
-  prompt:setText("ą")
-  prompt:update()
-  while true do
-    local kind, data = input.keys:recv()
-    prompt:handleInput(kind, data)
-    prompt:update()
-  end
-end)
 
-loop.run()
+return {
+  ANSIParser = ANSIParser,
+  ANSIBuffer = ANSIBuffer,
+  UnicodeText = UnicodeText,
+  Prompt = Prompt,
+}
