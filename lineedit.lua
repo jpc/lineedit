@@ -567,6 +567,7 @@ function Prompt:handleInput(kind, data)
       return false, 'eof'
     end
   elseif kind == 'text' then
+    data = string.gsub(data, '[\r\n\t]', { ['\r'] = '\\r', ['\n'] = '\\n', ['\t'] = '\t' })
     self:insertText(data)
     self:move(UnicodeText:new(data):length())
   end
