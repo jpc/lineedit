@@ -546,8 +546,10 @@ function Prompt:handleInput(kind, data)
     elseif data == 'Down' then
       self:historyNext()
     elseif data == 'Backspace' then
-      self:move(-1)
-      self:delete(self.pos)
+      if self.pos > 1 then
+        self:move(-1)
+        self:delete(self.pos)
+      end
     elseif data == 'Delete' then
       self:delete(self.pos)
     elseif data == 'Ctrl-W' then
