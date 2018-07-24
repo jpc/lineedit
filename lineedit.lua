@@ -325,7 +325,6 @@ Prompt.new = O.constructor(function (self, input, output, opts)
   self.input = input
   self.output = output
   self.buf = ANSIBuffer:new()
-  self.lines = T.Mailbox:new()
 
   self.history = opts.history or {}
   self.history_offset = 1
@@ -511,17 +510,18 @@ function Prompt:handleInput(kind, data)
       self:move(n)
       self:delete(self.pos, self.pos-n-1)
     elseif data == 'Enter' then
-      self.lines:put(self.text)
+      local line = self.text.bytes
       self:addToHistory(self.text)
       self:setText('')
+      return line
     elseif data == 'EOF' then
-      self.lines:put(data)
+      return false, 'eof'
     end
   elseif kind == 'text' then
     self:insertText(data)
     self:move(UnicodeText:new(data):length())
   end
-  return self
+  return
 end
 
 local input = ANSIParser:new(io.stdin)
@@ -534,7 +534,8 @@ T.go(function ()
   prompt:update()
   while true do
     local kind, data = input.keys:recv()
-    prompt:handleInput(kind, data):update()
+    prompt:handleInput(kind, data)
+    prompt:update()
   end
 end)
 
