@@ -131,6 +131,8 @@ function ANSIParser:_loop()
   end
 end
 
+
+
 local ANSIBuffer = O()
 
 ANSIBuffer.new = O.constructor(function (self, buf)
@@ -291,7 +293,6 @@ function UnicodeText:sub(s, e)
   if s > #self.offsets then s = #self.offsets end
   if not e or e == -1 or e > #self.offsets then e = #self.offsets else e = e + 1 end
   if e < s then return '' end
-  D'sub:'(s, e, self.offsets[s], self.offsets[e])
   return string.sub(self.bytes, self.offsets[s], self.offsets[e] - 1)
 end
 
@@ -329,12 +330,13 @@ Prompt.new = O.constructor(function (self, input, output, opts)
   self.history = opts.history or {}
   self.history_offset = 1
 
-  self.prompt = UnicodeText:new(opts.prompt or '❓ ')
-  self.text = self:setText('')
   self.pos = 1
+  self.prompt = UnicodeText:new(opts.prompt or '🌟 ')
+  self:setText('')
 
-  self.onscreen_prompt = UnicodeText:new('')
-  self.onscreen_text = UnicodeText:new('', self.onscreen_prompt:size())
+  self.empty_text = UnicodeText:new('')
+  self.onscreen_prompt = self.empty_text
+  self.onscreen_text = self.empty_text
   self.onscreen_pos = 1
 
   self.onscreen_columns = 0
@@ -350,7 +352,7 @@ function Prompt:setText(bytes)
   self.pos = math.min(self.pos, self.text:length()+1)
 end
 
-function Prompt:buf_clear_onsceen()
+function Prompt:buf_clear_onscreen()
   local rows = self.onscreen_text:wrapped_size(self.onscreen_columns)
   local crow = self.onscreen_text:wrapped_position(self.onscreen_pos, self.onscreen_columns)
   self.buf:down(rows - crow)
@@ -373,7 +375,7 @@ function Prompt:draw()
   local _, cols = io.get_term_size()
   self.onscreen_columns = cols
 
-  self:buf_clear_onsceen()
+  self:buf_clear_onscreen()
   self.buf:write(self.prompt.bytes):write(self.text.bytes)
   if self.text:size() % self.onscreen_columns == 0 then
     -- Print one additional space to force the cursor into the next line
@@ -482,7 +484,6 @@ function Prompt:historyNext()
 end
 
 function Prompt:handleInput(kind, data)
-  D'»'(kind, data)
   if kind == 'key' then
     if data == 'Left' then
       self:move(-1)
