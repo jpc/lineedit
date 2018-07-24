@@ -487,8 +487,8 @@ function Prompt:delete(ostart, oend)
 end
 
 function Prompt:addToHistory(text)
-  if self.history[#self.history] ~= text then
-    self.history[#self.history + 1] = text
+  if #text.bytes > 0 and self.history[#self.history] ~= text.bytes then
+    self.history[#self.history + 1] = text.bytes
   end
   self.history_offset = 1
   return self
