@@ -370,6 +370,37 @@ function Prompt:buf_position_cursor()
   return self.buf
 end
 
+function Prompt:clear()
+  local _, cols = io.get_term_size()
+  self.onscreen_columns = cols
+  self:buf_clear_onscreen():flush(self.output)
+  self.onscreen_pos = 1
+  self.onscreen_prompt = self.empty_text
+  self.onscreen_text = self.empty_text
+end
+
+function Prompt:write(fun)
+  local _, cols = io.get_term_size()
+  self.onscreen_columns = cols
+  self:buf_clear_onscreen()
+  fun(self.buf)
+  self.onscreen_pos = 1
+  self.onscreen_prompt = self.empty_text
+  self.onscreen_text = self.empty_text
+  self:draw()
+end
+
+function Prompt:commit()
+  local _, cols = io.get_term_size()
+  self.onscreen_columns = cols
+  local rows = self.onscreen_text:wrapped_size(self.onscreen_columns)
+  local crow = self.onscreen_text:wrapped_position(self.onscreen_pos, self.onscreen_columns)
+  self.buf:down(rows - crow):write('\n'):flush(self.output)
+  self.onscreen_pos = 1
+  self.onscreen_prompt = self.empty_text
+  self.onscreen_text = self.empty_text
+end
+
 function Prompt:draw()
   local _, cols = io.get_term_size()
   self.onscreen_columns = cols
@@ -512,9 +543,11 @@ function Prompt:handleInput(kind, data)
     elseif data == 'Enter' then
       local line = self.text.bytes
       self:addToHistory(self.text)
+      self:commit()
       self:setText('')
       return line
     elseif data == 'EOF' then
+      self:clear()
       return false, 'eof'
     end
   elseif kind == 'text' then
