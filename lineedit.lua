@@ -205,8 +205,9 @@ local UnicodeText = O()
 UnicodeText.__type = 'lineedit.UnicodeText'
 
 UnicodeText.new = O.constructor(function (self, bytes, start_vcol)
-  local vcol, off = start_vcol or  1, 1
-  local vcols, offsets, revoff = { vcol }, { off }, { 1 }
+  start_vcol = start_vcol or 1
+  local vcol, off = start_vcol, 1
+  local offsets, revoff = { off }, { 1 }
   local screenwidths, bytewidths = unicode.codepoint_widths(bytes)
   local j=1
   for i=1,#screenwidths do
@@ -216,40 +217,66 @@ UnicodeText.new = O.constructor(function (self, bytes, start_vcol)
     if width > 0 then
       j = j + 1
     end
-    vcols[j] = vcol
     offsets[j] = off
     revoff[off] = j
   end
   self.bytes = bytes
-  self.vcols = vcols
   self.offsets = offsets
+  self.screenwidths = screenwidths
   self.revoffsets = revoff
+  self.rows = {}
+  self.cols = {}
+  self.screen_start = start_vcol
+  self.screen_width = vcol - 1
+  self.wrap_cols = nil
 end)
 
 function UnicodeText:length()
-  return #self.vcols-1
+  return #self.offsets-1
 end
 
 function UnicodeText:size()
-  return self.vcols[#self.vcols]
+  return self.screen_width
+end
+
+function UnicodeText:rewrap(screen_cols)
+  if screen_cols == self.wrap_cols then return end
+  local widths = self.screenwidths
+  local row, col = 1, self.screen_start
+  local rows = self.rows
+  local cols = self.cols
+  local j = 1
+  for i=1,#widths+1 do
+    local width = string.byte(widths, i) or 1 -- space for cursor
+    if width > 0 then
+      if col + width > screen_cols+1 then
+        row = row + 1
+        col = 1
+      end
+      rows[j] = row
+      cols[j] = col
+      col = col + width
+      j = j + 1
+    end
+  end
+  for k=j,#rows do rows[k] = nil cols[k] = nil end
+  self.wrap_cols = screen_cols
 end
 
 function UnicodeText:wrapped_position(pos, cols)
-  if pos == -1 then pos = #self.vcols end
-  if pos > #self.vcols then pos = #self.vcols end
-  local vcol = self.vcols[pos]
-  local crow = math.ceil((vcol-1) / cols)
-  local ccol = (vcol-1) % cols + 1
-  if ccol == 1 and pos == #self.vcols then ccol = cols end
-  return crow, ccol
+  self:rewrap(cols)
+  if pos == -1 then pos = #self.cols end
+  if pos > #self.cols then pos = #self.cols end
+  return self.rows[pos], self.cols[pos]
 end
 
 function UnicodeText:wrapped_size(cols)
-  return math.ceil((self.vcols[#self.vcols]-1) / cols), cols
+  self:rewrap(cols)
+  return self.rows[#self.rows], cols
 end
 
 function UnicodeText:match(pattern, start)
-  if start > #self.vcols then start = #self.vcols end
+  if start > #self.offsets then start = #self.offsets end
   local results = {self.bytes:match(pattern, self.offsets[start])}
   for i,r in ipairs(results) do
     if type(r) == 'number' then
@@ -261,8 +288,8 @@ end
 
 function UnicodeText:sub(s, e)
   if not s then s = 1 end
-  if s > #self.vcols then s = #self.vcols end
-  if not e or e == -1 or e > #self.vcols then e = #self.vcols else e = e + 1 end
+  if s > #self.offsets then s = #self.offsets end
+  if not e or e == -1 or e > #self.offsets then e = #self.offsets else e = e + 1 end
   if e < s then return '' end
   D'sub:'(s, e, self.offsets[s], self.offsets[e])
   return string.sub(self.bytes, self.offsets[s], self.offsets[e] - 1)
@@ -319,7 +346,8 @@ function Prompt:setPrompt(bytes)
 end
 
 function Prompt:setText(bytes)
-  self.text = UnicodeText:new(bytes, self.prompt:size())
+  self.text = UnicodeText:new(bytes, self.prompt:size()+1)
+  self.pos = math.min(self.pos, self.text:length()+1)
 end
 
 function Prompt:buf_clear_onsceen()
@@ -372,7 +400,6 @@ function Prompt:move(cols)
   if cols == 'start' or self.pos < 1 then self.pos = 1 end
   local max = self.text:length()+1
   if cols == 'end' or self.pos > max then self.pos = max end
-  self.keepend = self.pos >= max
   return self
 end
 
