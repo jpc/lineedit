@@ -383,6 +383,9 @@ function Prompt:write(fun)
   local _, cols = io.get_term_size()
   self.onscreen_columns = cols
   self:buf_clear_onscreen()
+  if type(self.onscreen_last_output_col) == 'number' then
+    self.buf:up(1):col(self.onscreen_last_output_col)
+  end
   fun(self.buf)
   self.onscreen_pos = 1
   self.onscreen_prompt = self.empty_text
@@ -399,12 +402,23 @@ function Prompt:commit()
   self.onscreen_pos = 1
   self.onscreen_prompt = self.empty_text
   self.onscreen_text = self.empty_text
+  self.onscreen_last_output_col = nil
 end
 
 function Prompt:draw()
   local _, cols = io.get_term_size()
   self.onscreen_columns = cols
 
+  if self.onscreen_text:size() == 0 then
+    self.buf:write'\027[6n':flush(self.output)
+    local _, col = self.input.cursor_positions:recv()
+    if col > 1 then
+      self.buf:write('💬\n')
+      self.onscreen_last_output_col = col
+    else
+      self.onscreen_last_output_col = nil
+    end
+  end
   self:buf_clear_onscreen()
   self.buf:write(self.prompt.bytes):write(self.text.bytes)
   if self.text:size() % self.onscreen_columns == 0 then
